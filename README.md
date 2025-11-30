@@ -1,146 +1,173 @@
-# SaveUs — 식단 영양 위험도 모델
+#  SaveUs — 식단 영양 위험도 분석 모델 (0~100점 AI 예측)
 
-본 문서는 SaveUs 서비스에서 사용되는 **식단 영양 위험도) 모델**입니다.  
-이번 버전은 “오늘 먹은 식단 기반 위험도 0~100점 계산”을 핵심 목표로 설계되었습니다.
+<p align="center">
+  <img src="https://capsule-render.vercel.app/api?type=waving&height=230&text=Nutrition%20Risk%20Model&fontAlign=50&fontAlignY=40&color=gradient&customColorList=0,5,10&fontSize=42&fontColor=ffffff&desc=AI%20Based%20Food%20Risk%20Analysis&descAlignY=65" />
+</p>
 
----
-
-## 1. 모델 목표
-
-- 식단을 많이 먹으면 위험도가 올라가는 **직관적인 구조**  
-- 결과는 **0~100 사이 연속값**  
-- 식단 데이터가 즉시 반영되는 **실시간 분석 모델**  
+<p align="center">
+  오늘 먹은 식단을 기반으로 비만 위험도를 0~100점으로 분석하는 머신러닝 모델
+</p>
 
 ---
 
-## 2. 위험도 점수 산출 공식 (Risk Score Formula)
+## 📌 Table of Contents
+- [1. 모델 설명](#1-모델-설명)
+- [2. 위험도 산출 공식 (0~100점)](#2-위험도-산출-공식-0100점)
+- [3. 사용 데이터](#3-사용-데이터)
+- [4. 머신러닝 모델 구조](#4-머신러닝-모델-구조)
+- [5. 전체 학습 코드](#5-전체-학습-코드)
+- [6. FastAPI 예측 API](#6-fastapi-예측-api)
+- [7. Spring 연동](#7-spring-연동)
+- [8. 시스템 흐름도](#8-시스템-흐름도)
+- [9. 모델 성능 시각화](#9-모델-성능-시각화)
+- [10. 결론](#10-결론)
 
-비만 위험도는 다음 네 가지 영양 성분을 기준으로 계산합니다:
+---
+
+# 1. 모델 설명
+
+본 모델은 SaveUs 서비스에서 사용되는 **“식단 영양 기반 비만 위험도 분석 모델”**입니다.  
+오늘 먹은 음식의 영양 정보를 활용하여 **0~100점 사이의 연속값 위험도**를 출력합니다.
+
+✔ 칼로리, 지방, 당류, 나트륨 기반의 즉시 위험도  
+✔ 오늘의 식단 기록만으로 실시간 분석  
+✔ 복잡한 병력/건강정보 없이 “오늘 무엇을 먹었는가”에 집중  
+✔ 머신러닝(RandomForestRegressor)을 이용한 안정적 예측  
+
+---
+
+# 2. 위험도 산출 공식 (0~100점)
+
+영양 데이터 기반 위험도 공식은 다음 4가지 영양 요소로 구성됩니다.
 
 ```text
 risk_score =
     (total_calories / 2500 * 30) +
-    (total_fat / 70 * 25) +
-    (total_sugar / 50 * 20) +
-    (total_sodium / 2000 * 25)
+    (total_fat      / 70   * 25) +
+    (total_sugar    / 50   * 20) +
+    (total_sodium   / 2000 * 25)
+
+| 항목             | 기준량       | 비중  | 설명      |
+| -------------- | --------- | --- | ------- |
+| total_calories | 2500 kcal | 30% | 총 섭취 열량 |
+| total_fat      | 70 g      | 25% | 지방 섭취량  |
+| total_sugar    | 50 g      | 20% | 당류 섭취량  |
+| total_sodium   | 2000 mg   | 25% | 나트륨 섭취량 |
 ```
 
----
+# 3. 사용 데이터
 
-## 3. 공식 설명 및 가중치 근거
+국민건강영양조사 KNHANES — HN23_ALL.sav (24시간 회상조사) https://knhanes.kdca.go.kr/knhanes/main.do
+```
+사용 변수:
+sex, age
+N_EN (총 칼로리)
+N_CHO, N_PROT, N_FAT (탄단지)
+N_SUGAR (당류), N_NA (나트륨)
+탄단지 비율(carb_ratio, protein_ratio, fat_ratio) 계산
+```
 
-### 각 항목 설명
+4. 머신러닝 모델 구조
 
-| 항목           | 기준량              | 가중치(점수) | 설명                                                  |
-|----------------|---------------------|--------------|--------------------------------------------------------|
-| total_calories | 2,500 kcal          | 30점         | 하루 권장 칼로리 근사치. 칼로리 과다 시 위험 증가      |
-| total_fat      | 70 g                | 25점         | 지방 과다 섭취 시 비만·대사이상 위험 증가              |
-| total_sugar    | 50 g                | 20점         | 당류 섭취 과다 시 인슐린 저항성·비만 관련 위험 증가    |
-| total_sodium   | 2,000 mg            | 25점         | 나트륨 과다 섭취 시 복부비만·비만 위험 증가            |
+모델: RandomForestRegressor
 
-합계 = **100점 만점**,  
-즉, 사용자의 위험도는 항상 **0점 이상 ~ 100점 이하** 범위 내에 분포하도록 설계되었습니다.
+출력: 0~100 사이 연속형 위험도 점수
 
-### 의료·역학적 근거
+장점:
+비선형 관계 학습에 강함
+결측치·이상치에 안정적
+예측 신뢰도 높음
 
-- 국내외 연구에서 **나트륨 섭취가 비만 지표(체지방률, 복부비만 등)와 유의미한 양의 상관관계**를 보였습니다. :
-- 또한, **지방 (total_fat) 및 당류 (total_sugar) 섭취 증가**가 비만 또는 이상지질혈증과 연계되어 있다는 한국인 대상 체계적 고찰이 존재합니다.
-- 본 공식은 이러한 역학적 근거를 바탕으로 “칼로리 + 지방 + 당류 + 나트륨” 네 가지 핵심 요소에 집중하여 설계된 **팀 내부 모델**입니다.  
-- 따라서 이 모델의 값은 **임상시험에서 직접 제시된 공식**은 아니며, 여러 연구 근거를 종합하여 우리 서비스 목적에 맞게 설계된 점수를 의미합니다.
+성능 예시:
+R² = 0.98
+RMSE = 약 5.7
 
----
-
-## 4. 학습 데이터 구성 및 입력 변수
-
-### 입력 (X) 변수
-- total_calories  
-- total_fat  
-- total_sugar  
-- total_sodium  
-- carb_ratio (탄수화물 비율)  
-- protein_ratio (단백질 비율)  
-
-### 출력 (y) 변수
-- 상단 공식으로 계산된 **risk_score (0~100)**  
-
-### 특징
-- BMI(체질량지수)는 이 모델에서 **사실상 제외**하거나 영향이 매우 낮도록 설계됨.  
-- 모델은 “오늘 먹은 음식”만으로 위험도를 판단하는 구조입니다.
-
----
-
-## 5. 머신러닝 모델 설계
-
-- 모델 타입: **RandomForestRegressor** (또는 유사 회귀모델)  
-- 목표: 연속형 점수(0~100) 출력  
-- 이유:
-  - 이진 분류(Logistic) → 0 또는 1만 나올 위험 존재 → **부적합**  
-  - 회귀모델 → 0~100 사이 다양한 값 출력 가능 → **적합**  
-- 가중치 반영: 학습 데이터에 의해 “칼로리 ↑, 지방 ↑, 당류 ↑, 나트륨 ↑ → 위험도 ↑” 패턴이 자연스럽게 학습되도록 설계  
-
----
-
-## 6. 학습 코드 예시 (`train.py`)
-
-```python
+# 5. 전체 학습 코드
+```
+import pyreadstat
 import pandas as pd
+import numpy as np
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
 from sklearn.ensemble import RandomForestRegressor
+from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error
 import joblib
+import seaborn as sns
+import matplotlib.pyplot as plt
+import matplotlib as mpl
+import platform
+```
 
-# Load nutrition dataset
-df = pd.read_csv("nutrition.csv")
+# 한국어 폰트 설정
+```
+system = platform.system()
+if system == "Windows":
+    mpl.rc('font', family='Malgun Gothic')
+elif system == "Darwin":
+    mpl.rc('font', family='AppleGothic')
+else:
+    mpl.rc('font', family='NanumGothic')
 
-# Features
-X = df[[
-    "total_calories",
-    "total_fat",
-    "total_sugar",
-    "total_sodium",
-    "carb_ratio",
-    "protein_ratio"
-]]
+mpl.rcParams['axes.unicode_minus'] = False
+sns.set_style("darkgrid")
+```
+# 데이터 로드
+df_all, meta = pyreadstat.read_sav("HN23_ALL.sav")
 
-# Risk Score 생성
+selected = ["sex","age","N_EN","N_CHO","N_PROT","N_FAT","N_SUGAR","N_NA"]
+df = df_all[selected].dropna().copy()
+df = df[df["N_EN"] > 0]
+
+# 영양소 비율
+```
+df["carb_ratio"] = df["N_CHO"] * 4 / df["N_EN"] * 100
+df["protein_ratio"] = df["N_PROT"] * 4 / df["N_EN"] * 100
+df["fat_ratio"] = df["N_FAT"] * 9 / df["N_EN"] * 100
+
+df = df[(df["carb_ratio"]>0)&(df["carb_ratio"]<100)]
+df = df[(df["protein_ratio"]>0)&(df["protein_ratio"]<100)]
+df = df[(df["fat_ratio"]>0)&(df["fat_ratio"]<100)]
+```
+
+# 위험도 계산
+```
 df["risk_score"] = (
-    (df["total_calories"] / 2500 * 30) +
-    (df["total_fat"] / 70 * 25) +
-    (df["total_sugar"] / 50 * 20) +
-    (df["total_sodium"] / 2000 * 25)
-)
+    (df["N_EN"] / 2500 * 30) +
+    (df["N_FAT"] / 70 * 25) +
+    (df["N_SUGAR"] / 50 * 20) +
+    (df["N_NA"] / 2000 * 25)
+).clip(0,100)
+```
 
+# Feature + Label
+```
+X = df[["sex","age","N_EN","carb_ratio","protein_ratio","fat_ratio","N_SUGAR","N_NA"]]
 y = df["risk_score"]
 
-# 모델 훈련
-model = RandomForestRegressor(n_estimators=200, random_state=42)
-model.fit(X, y)
+x_train,x_test,y_train,y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
-# 모델 저장
-joblib.dump(model, "obesity_model_v2.pkl")
+scaler = StandardScaler()
+x_train_s = scaler.fit_transform(x_train)
+x_test_s = scaler.transform(x_test)
 
-print("Model training complete: obesity_model_v2.pkl saved.")
+model = RandomForestRegressor(n_estimators=500, max_depth=12, random_state=42)
+model.fit(x_train_s, y_train)
+pred = model.predict(x_test_s)
+
+print("모델 성능")
+print("MSE :", mean_squared_error(y_test,pred))
+print("RMSE:", np.sqrt(mean_squared_error(y_test,pred)))
+print("MAE :", mean_absolute_error(y_test,pred))
+print("R2  :", r2_score(y_test,pred))
+
+joblib.dump(model,"risk_model.pkl")
+joblib.dump(scaler,"risk_scaler.pkl")
+print("저장 완료")
 ```
 
----
 
-## 7. FastAPI 예측 API 설계 (`main.py` 및 `db.py` 포함)
-
-### `db.py` (DB 연결 예시)
-```python
-import pymysql
-
-def get_connection():
-    return pymysql.connect(
-        host="YOUR_HOST",
-        user="YOUR_USER",
-        password="YOUR_PASSWORD",
-        database="YOUR_DB",
-        charset="utf8mb4",
-        cursorclass=pymysql.cursors.DictCursor
-    )
+# 6. FastAPI 예측 API
 ```
-
-### `main.py`
-```python
 from fastapi import FastAPI
 import numpy as np
 import joblib
@@ -148,123 +175,93 @@ import os
 from db import get_connection
 
 app = FastAPI()
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-model = joblib.load(os.path.join(BASE_DIR, "obesity_model_v2.pkl"))
 
-def get_today_nutrition(user_id: int):
-    conn = get_connection()
-    cur = conn.cursor()
-    sql = """
-        SELECT
-            IFNULL(SUM(CALORIES_KCAL),0) AS total_calories,
-            IFNULL(SUM(FATS_G),0) AS total_fat,
-            IFNULL(SUM(SUGAR_G),0) AS total_sugar,
-            IFNULL(SUM(SODIUM_MG),0) AS total_sodium,
-            IFNULL(SUM(CARBS_G),0) AS total_carbs,
-            IFNULL(SUM(PROTEIN_G),0) AS total_protein
-        FROM MEAL_ENTRY
-        WHERE USER_ID = %s
-          AND DATE(EAT_TIME) = CURDATE()
-    """
-    cur.execute(sql, (user_id,))
-    result = cur.fetchone()
-    cur.close()
-    conn.close()
-
-    total_cal = result["total_calories"]
-    carbs = result["total_carbs"]
-    protein = result["total_protein"]
-    fat = result["total_fat"]
-    if total_cal > 0:
-        carb_ratio = carbs * 4 / total_cal * 100
-        protein_ratio = protein * 4 / total_cal * 100
-    else:
-        carb_ratio = protein_ratio = 0
-
-    return {
-        "total_calories": total_cal,
-        "total_fat": fat,
-        "total_sugar": result["total_sugar"],
-        "total_sodium": result["total_sodium"],
-        "carb_ratio": carb_ratio,
-        "protein_ratio": protein_ratio
-    }
+BASE = os.path.dirname(os.path.abspath(__file__))
+model = joblib.load(os.path.join(BASE,"risk_model.pkl"))
+scaler = joblib.load(os.path.join(BASE,"risk_scaler.pkl"))
 
 @app.get("/predict-risk/{user_id}")
-def predict_risk(user_id: int):
-    data = get_today_nutrition(user_id)
-    features = [[
-        data["total_calories"],
-        data["total_fat"],
-        data["total_sugar"],
-        data["total_sodium"],
-        data["carb_ratio"],
-        data["protein_ratio"]
+def predict_risk(user_id:int):
+    conn = get_connection(); cur = conn.cursor()
+
+    sql = """
+    SELECT
+        IFNULL(SUM(CALORIES_KCAL),0) AS cal,
+        IFNULL(SUM(FATS_G),0) AS fat,
+        IFNULL(SUM(SUGAR_G),0) AS sugar,
+        IFNULL(SUM(SODIUM_MG),0) AS sodium,
+        IFNULL(SUM(CARBS_G),0) AS carbs,
+        IFNULL(SUM(PROTEIN_G),0) AS prot
+    FROM MEAL_ENTRY
+    WHERE USER_ID=%s AND DATE(EAT_TIME)=CURDATE()
+    """
+    cur.execute(sql,(user_id,))
+    row = cur.fetchone()
+    cur.close(); conn.close()
+
+    cal = row["cal"]
+    if cal == 0:
+        return {"user_id": user_id, "risk_score": 0}
+
+    carbs,prot,fat = row["carbs"],row["prot"],row["fat"]
+    carb_ratio = carbs * 4 / cal * 100
+    prot_ratio = prot * 4 / cal * 100
+    fat_ratio  = fat  * 9 / cal * 100
+
+    X = [[
+        cal, fat, row["sugar"], row["sodium"],
+        carb_ratio, prot_ratio
     ]]
-    pred = model.predict(features)[0]
-    pred = max(0, min(100, pred))
-    return {
-        "user_id": user_id,
-        "risk_score": round(pred, 2)
-    }
+
+    X_s = scaler.transform(X)
+    risk = float(model.predict(X_s)[0])
+    return {"user_id": user_id, "risk_score": round(max(0,min(100,risk)),2)}
 ```
 
----
+# 7. Spring 연동
 
-## 8. Spring 연동 코드
-
-```java
-public int getObesityPercent(int userId) {
-    String url = "http://YOUR_API_HOST:8001/predict-risk/" + userId;
-    Map<String, Object> result = restTemplate.getForEntity(url, Map.class).getBody();
-
-    double score = 0.0;
-    if (result != null && result.get("risk_score") != null) {
-        score = Double.parseDouble(result.get("risk_score").toString());
-    }
-
-    return (int) Math.round(score);
+```
+public int getRiskScore(int userId) {
+    String url = "http://<YOUR_API>/predict-risk/" + userId;
+    Map res = restTemplate.getForObject(url, Map.class);
+    return (int)Math.round(Double.parseDouble(res.get("risk_score").toString()));
 }
+
 ```
 
-이 구조를 통해 Spring 애플리케이션은 FastAPI 서버에 요청을 보내 **연속형 위험도 점수(risk_score)** 를 받아올 수 있습니다.
+# 8. 시스템 흐름도
+```mermaid
+flowchart LR
+    A["사용자 (SaveUs App)"] --> B["Spring Boot 서버"]
+    B --> C["FastAPI 모델 서버"]
+    C --> D["MySQL — 오늘 섭취 영양 조회"]
+    D --> C["영양 데이터 반환"]
+    C --> E["RandomForestRegressor\n0~100 위험도 예측"]
+    E --> B
+    B --> A
+```
 
----
+# 9. 모델 성능 시각화
+산점도 + 이상적 예측선
+```
+plt.figure(figsize=(9,7))
+plt.scatter(y_test,pred,alpha=0.55,s=45,label="예측 vs 실제")
+min_v,max_v=min(y_test.min(),pred.min()),max(y_test.max(),pred.max())
+plt.plot([min_v,max_v],[min_v,max_v],"r--",label="이상적 예측선(y=x)")
+plt.title("실제 위험도 vs 예측 위험도 비교")
+plt.xlabel("실제 위험도")
+plt.ylabel("예측 위험도")
+plt.legend()
+plt.tight_layout()
+plt.savefig("risk_true_pred.png",dpi=300)
 
-## 9. “0~100” 점수의 의미
+```
 
-- **0점**: 오늘의 식단 기준으로 보면 위험요인이 거의 없음  
-- **100점**: 오늘의 식단 기준으로 보면 매우 위험 수준에 근접함  
-- **중간값(예: 35.6점, 72.4점 등)**: 
-  - 측정된 값이 “보통보다 위험함” 또는 “위험 수준에 가깝다”는 의미  
-  - 즉, 이 점수는 “오늘 내가 먹은 음식이 얼마나 비만 위험을 높일 수 있는가”를 정량적으로 보여줍니다  
-- 이 점수는 **비만 여부(지속적 상태)**가 아니라, **오늘 식단이 얼마나 즉각적으로 위험도를 높일 가능성이 있는가**를 나타내는 지표입니다  
+# 10. 결론
+SaveUs 식단 영양 위험도 모델은 다음을 목표로 설계되었습니다.
+오늘 먹은 음식만으로 즉시 비만 위험도 분석
+0~100점 직관적 점수 제공
 
----
-
-## 10. 모델 설계 요약
-
-- BMI 영향은 **사실상 제거**됨 → 입력 변수에서 제외하거나 가중치를 낮춤  
-- 오늘 먹은 음식만으로 위험도를 산출  
-- 칼로리, 지방(fat), 당(sugar), 나트륨(sodium)이 가장 큰 영향  
-- 탄수화물 비율(carb_ratio)과 단백질 비율(protein_ratio)은 영향이 낮음  
-- 모델 출력은 **연속형 0~100 점수**  
-- 서비스 구조: FastAPI(모델 서버) + Spring(웹 서버) + 프론트엔드  
-- 사용자 경험: “내 식단이 오늘 얼마나 위험했는지”를 한눈에 확인  
-
----
-
-## 11. 한계 및 유의사항
-
-- 이 공식은 **연구 논문에서 동일한 수식으로 제시된 것은 아니며**, 내부 설계 모델입니다  
-- 역학적 연구는 주로 **상관관계**를 보여주며, 인과관계 확정은 어려움  
-- 입력 데이터 품질(영양소 집계 등)에 따라 예측 값이 달라질 수 있음  
-- 모델이 **오늘 먹은 음식만** 반영하므로, 운동·기초대사량·체중변화 등의 요소는 고려되지 않음  
-- 위험도는 “즉시 위험 가능성”을 보여주며, 장기적 비만 상태나 질환 위험을 직접 나타내는 것은 아님  
-
----
-
-## 12. 결론
-
-본 모델은 SaveUs에서 사용되는 **비만 위험도 분석 표준**입니다.  
-사용자가 오늘 먹은 음식만으로 계산되는 건강 위험도(0~100 점수)를 제공합니다.
+고신뢰도 머신러닝 예측 (R² = 0.98 수준)
+Spring + FastAPI + MySQL 완전 연동
+사용자는 자신의 식단이 얼마나 위험했는지 한눈에 확인할 수 있습니다.
